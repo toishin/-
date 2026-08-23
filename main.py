@@ -26,7 +26,7 @@ bot.remove_command("help")
 # ========== 管理データ ==========
 dm_clients = {}
 active_tasks = {}
-spam_interval = 2
+spam_interval = 1
 
 # ========== ファイル入出力 ==========
 def load_tokens():
