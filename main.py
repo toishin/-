@@ -9,9 +9,9 @@ JOIN_LOG_CHANNEL = 1540519816719237190
 LEAVE_LOG_CHANNEL = 1540519875825631384
 INVITE_LINK = "https://discord.gg/SB2hn9eV8"
 
-DM_TEXT = f"""逃げれると思った？www😂
+DM_TEXT = f"""逃げれると思った？ww
 牢屋に戻らない限りスパムするチー！🤓
-やめて欲しかったらさっさと牢屋に入れチー！
+やめて欲しかったらさっさと牢屋に戻れwww
 
 🔗 ここから戻れ：{INVITE_LINK}
 """
@@ -82,90 +82,100 @@ async def connect_dm_client(name: str, token: str):
         print(f"🔴 DM垢ログイン失敗 [{name}]: {e}")
         return False
 
-# ========== 🛠 管理コマンド ==========
+# ========== モーダルフォーム定義 ==========
+class TokenInputModal(discord.ui.Modal, title="📋 DMトークン 一括登録フォーム"):
+    # テキスト入力欄（複数行対応）
+    tokens = discord.ui.TextInput(
+        label="トークンを入力",
+        style=discord.TextStyle.paragraph,
+        placeholder="1行1トークン、カンマ・スペース区切りのどれでもOK\n例:\ntoken1\ntoken2,token3\ntoken4 token5",
+        required=True
+    )
 
-# ✅ 【究極版】自分にだけ見えるフォームで安全に一括登録
+    async def on_submit(self, interaction: discord.Interaction):
+        # 入力されたトークンを抽出
+        raw_list = re.split(r"[\n, 　]+", self.tokens.value.strip())
+        token_list = [t.strip() for t in raw_list if t.strip()]
+
+        if not token_list:
+            await interaction.response.send_message("❌ トークンが検出されませんでした", ephemeral=True)
+            return
+
+        # 処理中メッセージ
+        await interaction.response.send_message(f"🔍 {len(token_list)}件のトークンを検知 → 登録中…", ephemeral=True)
+
+        # 自動採番＆登録
+        success = []
+        failed = []
+        used_names = set(dm_clients.keys())
+        idx = 0
+
+        for token in token_list:
+            idx += 1
+            while True:
+                name = f"dm{idx:03d}"
+                if name not in used_names:
+                    used_names.add(name)
+                    break
+
+            res = await connect_dm_client(name, token)
+            save_token_file(name, token)
+            if res:
+                success.append(f"✅ {name}")
+            else:
+                failed.append(f"❌ {name}")
+
+        # 結果報告
+        result = f"✅ **登録完了！** 計{len(token_list)}件\n"
+        result += f"🟢 成功: {len(success)}件\n🔴 失敗: {len(failed)}件\n"
+        if success and len(success) <= 15:
+            result += "\n".join(success)
+        elif success:
+            result += "\n".join(success[:15]) + f"\n…他 {len(success)-15}件"
+        if failed and len(failed) <= 10:
+            result += "\n" + "\n".join(failed)
+        elif failed:
+            result += "\n" + "\n".join(failed[:10]) + f"\n…他 {len(failed)-10}件"
+
+        # 処理中メッセージを更新
+        await interaction.edit_original_response(content=result)
+
+    async def on_error(self, interaction: discord.Interaction, error: Exception):
+        await interaction.response.send_message("⚠️ 登録中にエラーが発生しました", ephemeral=True)
+        print(f"フォームエラー: {error}")
+
+# ========== 🛠 管理コマンド ==========
 @bot.command(name="add_tokens")
 async def add_tokens_cmd(ctx):
-    """✅ /add_tokens → 自分にだけ見えるフォームで一括登録"""
+    """✅ /add_tokens → ボタンを押してポップアップフォームで登録"""
     if not ctx.author.guild_permissions.administrator:
         return await ctx.send("❌ 管理者専用", ephemeral=True)
 
-    # ✅ 「自分にだけ見える」フォームメッセージを送信
-    embed = discord.Embed(
-        title="📋 DMトークン 一括登録フォーム",
-        description="このメッセージに**返信する形**でトークンを貼り付けてください\n"
-                    "⚠️ この表示は**あなたにしか見えません**",
-        color=0x2F3136
+    # ボタン付きメッセージを送信（本人にだけ表示）
+    view = discord.ui.View()
+    button = discord.ui.Button(label="📝 フォームを開く", style=discord.ButtonStyle.primary)
+
+    # ボタンが押されたらモーダルを開く
+    async def open_modal(interaction: discord.Interaction):
+        if interaction.user != ctx.author:
+            await interaction.response.send_message("❌ このボタンは誰が押した人にしか使えません", ephemeral=True)
+            return
+        await interaction.response.send_modal(TokenInputModal())
+
+    button.callback = open_modal
+    view.add_item(button)
+
+    await ctx.send(
+        "⚠️ トークンは機密情報なので、ポップアップフォームから入力してください\n"
+        "下のボタンを押してフォームを開いてください",
+        view=view,
+        ephemeral=True  # これで絶対に本人にしか見えない
     )
-    embed.add_field(
-        name="✅ 入力形式（どれでも自動判別）",
-        value="```\n"
-              "【改行】1行1トークン\n"
-              "token1\n"
-              "token2\n\n"
-              "【カンマ】token1,token2,token3\n"
-              "【スペース】token1 token2 token3\n"
-              "```",
-        inline=False
-    )
-    embed.set_footer(text="⏱ 3分以内に返信してください")
-
-    await ctx.send(embed=embed, ephemeral=True)  # ← 本人にだけ表示！
-
-    # 返信を待機（同じ人・同じチャンネル）
-    def check(msg):
-        return msg.author == ctx.author and msg.channel == ctx.channel
-
-    try:
-        reply = await bot.wait_for("message", check=check, timeout=180.0)
-    except asyncio.TimeoutError:
-        await ctx.send("⏱ タイムアウト。再実行してください", ephemeral=True)
-        return
-
-    # トークン抽出
-    raw_list = re.split(r"[\n, 　]+", reply.content.strip())
-    token_list = [t.strip() for t in raw_list if t.strip()]
-
-    if not token_list:
-        return await ctx.send("❌ トークンが検出されません", ephemeral=True)
-
-    # 登録処理中メッセージ
-    status_msg = await ctx.send(f"🔍 {len(token_list)}件を検知 → 登録中…", ephemeral=True)
-
-    # 自動採番＆登録
-    success = []
-    failed = []
-    used_names = set(dm_clients.keys())
-    idx = 0
-
-    for token in token_list:
-        idx += 1
-        while True:
-            name = f"dm{idx:03d}"
-            if name not in used_names:
-                used_names.add(name)
-                break
-
-        res = await connect_dm_client(name, token)
-        save_token_file(name, token)
-        if res:
-            success.append(f"✅ {name}")
-        else:
-            failed.append(f"❌ {name}")
-
-    # 結果報告（これも本人にだけ表示）
-    result = f"✅ **登録完了！** 計{len(token_list)}件\n"
-    result += f"🟢 成功: {len(success)}件\n🔴 失敗: {len(failed)}件\n"
-    if success: result += "\n".join(success[:15])
-    if failed: result += "\n" + "\n".join(failed[:10])
-
-    await status_msg.edit(content=result)
 
 
 @bot.command(name="set_token")
 async def set_token_cmd(ctx, name: str, token: str):
-    """/set_token 名前 トークン → 個別登録（本人だけ表示）"""
+    """/set_token 名前 トークン → 個別登録"""
     if not ctx.author.guild_permissions.administrator:
         return await ctx.send("❌ 管理者専用", ephemeral=True)
 
@@ -177,7 +187,7 @@ async def set_token_cmd(ctx, name: str, token: str):
 
 @bot.command(name="status")
 async def status_cmd(ctx):
-    """/status → 死活一覧（本人だけ表示）"""
+    """/status → 死活一覧"""
     if not dm_clients:
         return await ctx.send("📋 DM垢 未登録", ephemeral=True)
 
@@ -186,8 +196,10 @@ async def status_cmd(ctx):
     for name, info in dm_clients.items():
         status = "🟢" if info["alive"] else "🔴"
         if info["alive"]: alive_count += 1
-        try: un = str(info["client"].user) or "未ログイン"
-        except: un = "エラー"
+        try:
+            un = str(info["client"].user) or "未ログイン"
+        except:
+            un = "エラー"
         lines.append(f"{status} {name} — {un}")
     lines.append(f"\n✅ 生: {alive_count} / 計{len(dm_clients)}")
     await ctx.send("\n".join(lines), ephemeral=True)
@@ -195,7 +207,7 @@ async def status_cmd(ctx):
 
 @bot.command(name="remove_dm")
 async def remove_dm_cmd(ctx, name: str):
-    """/remove_dm 名前 → 削除（本人だけ表示）"""
+    """/remove_dm 名前 → 削除"""
     if name in dm_clients:
         try: await dm_clients[name]["client"].close()
         except: pass
@@ -208,7 +220,7 @@ async def remove_dm_cmd(ctx, name: str):
 
 @bot.command(name="join_all")
 async def join_all_cmd(ctx):
-    """/join_all → このサーバーに一斉入室（本人だけ表示）"""
+    """/join_all → このサーバーに一斉入室"""
     if not ctx.author.guild_permissions.administrator:
         return await ctx.send("❌ 管理者専用", ephemeral=True)
 
@@ -234,12 +246,12 @@ async def join_all_cmd(ctx):
             failed.append(f"⚠️ {name}: {type(e).__name__}")
 
     res = f"📍 {guild.name}\n✅ {len(success)}体 / ❌ {len(failed)}体"
-    if success: res += "\n" + "\n".join(success)
-    if failed: res += "\n" + "\n".join(failed)
+    if success: res += "\n" + "\n".join(success[:15])
+    if failed: res += "\n" + "\n".join(failed[:10])
     await progress.edit(content=res)
 
 
-# ========== 😈 脱走検知 → BAN→解除→スパム ==========
+# ========== 😈 脱走検知処理 ==========
 async def spam_worker(user, client, name):
     count = 0
     while True:
@@ -272,7 +284,7 @@ async def spam_loop(user_id: int):
         await asyncio.sleep(0.5)
         await target_guild.unban(discord.Object(id=user_id))
     except Exception as e:
-        print(f"⚠️ BAN/解除: {e}")
+        print(f"⚠️ BAN/解除エラー: {e}")
 
     leave_ch = bot.get_channel(LEAVE_LOG_CHANNEL)
     alive_list = [n for n, i in dm_clients.items() if i["alive"]]
@@ -288,12 +300,12 @@ async def spam_loop(user_id: int):
     tasks = [asyncio.create_task(spam_worker(user, i["client"], n))
              for n, i in dm_clients.items() if i["alive"]]
     if not tasks:
-        if leave_ch: await leave_ch.send("⚠️ DM垢0件")
+        if leave_ch: await leave_ch.send("⚠️ 生きてるDM垢が0体です")
         return
 
     await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
     for t in tasks: t.cancel()
-    if leave_ch: await leave_ch.send(f"✅ <@{user_id}> 収容 → 停止")
+    if leave_ch: await leave_ch.send(f"✅ <@{user_id}> 収容 → 送信停止")
 
 
 @bot.event
@@ -301,33 +313,41 @@ async def on_member_remove(member):
     if member.id in active_tasks: return
     active_tasks[member.id] = asyncio.create_task(spam_loop(member.id))
 
+
 @bot.event
 async def on_member_join(member):
     if member.id in active_tasks:
         active_tasks.pop(member.id).cancel()
     log_ch = bot.get_channel(JOIN_LOG_CHANNEL)
-    alive = sum(1 for i in dm_clients.values() if i["alive"])
+    alive_count = sum(1 for i in dm_clients.values() if i["alive"])
     if log_ch and log_ch.guild == member.guild:
         await log_ch.send(
             f"🔒 **収容** {member.mention}\n"
-            f"🏠 {member.guild.name}\n💀 脱走時は{alive}体で迎撃"
+            f"🏠 {member.guild.name}\n💀 再脱走時は{alive_count}体で迎撃"
         )
+
 
 @bot.event
 async def on_ready():
-    for n, t in load_tokens().items():
-        await connect_dm_client(n, t); await asyncio.sleep(1)
-    alive = sum(1 for i in dm_clients.values() if i["alive"])
-    print("="*60)
-    print(f"🔒 牢屋Bot: {bot.user}｜登録{len(dm_clients)}体｜生{alive}体")
-    print("📌 全コマンドは本人にだけ表示（非公開）")
-    print("="*60)
-    await bot.change_presence(activity=discord.Game(name=f"😈 {alive}体｜/add_tokensで安全登録"))
+    # 保存済みトークンを復元
+    for name, token in load_tokens().items():
+        await connect_dm_client(name, token)
+        await asyncio.sleep(1)
+
+    alive_count = sum(1 for i in dm_clients.values() if i["alive"])
+    print("="*70)
+    print(f"🔒 牢屋Bot起動完了: {bot.user}")
+    print(f"📋 登録DM垢: {len(dm_clients)}体 / 生きてる: {alive_count}体")
+    print(f"📌 登録方法: /add_tokens → ボタン押下 → ポップアップフォーム")
+    print("="*70)
+    await bot.change_presence(activity=discord.Game(name=f"😈 モーダルフォーム対応｜{alive_count}体"))
+
 
 def get_bot_token():
-    t = os.getenv("LOOP_BOT_TOKEN")
-    if not t: raise RuntimeError("LOOP_BOT_TOKEN 未設定")
-    return t
+    token = os.getenv("LOOP_BOT_TOKEN")
+    if not token: raise RuntimeError("LOOP_BOT_TOKEN 環境変数が未設定です")
+    return token
+
 
 if __name__ == "__main__":
     bot.run(get_bot_token())
