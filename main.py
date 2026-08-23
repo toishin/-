@@ -3,16 +3,16 @@ from discord.ext import commands
 import asyncio
 from datetime import datetime
 import os
+import re
 
 # ========== 牢屋設定 ==========
-# 🔽 サーバーID指定は不要になりました！
 JOIN_LOG_CHANNEL = 1540519816719237190
 LEAVE_LOG_CHANNEL = 1540519875825631384
 INVITE_LINK = "https://discord.gg/SB2hn9eV8"
 
-DM_TEXT = f"""脱走しようとしたね？お前は逃げれないよww😂
-牢屋に戻らない限りスパムし続けるよwwww
-スパムやめて欲しかったら牢屋に戻れwww
+DM_TEXT = f"""逃げようとしたな？お前は逃げれないよww😂
+牢屋に戻らない限りスパムし続けるﾁｰ!🤓
+牢屋に戻ればスパムはしないチーよwww
 
 🔗 ここから戻れ：{INVITE_LINK}
 """
@@ -25,9 +25,9 @@ bot = commands.Bot(command_prefix="/", intents=intents)
 bot.remove_command("help")
 
 # ========== 管理データ ==========
-dm_clients = {}       # {名前: {client, token, alive}}
+dm_clients = {}
 active_tasks = {}
-spam_interval = 2     # 各垢の送信間隔（秒）
+spam_interval = 2  # 送信間隔（秒）
 
 # ========== ファイル入出力 ==========
 def load_tokens():
@@ -45,7 +45,6 @@ def load_tokens():
 def save_token_file(name, token):
     tokens = load_tokens()
     tokens[name] = token
-    tokens[name] = token
     with open(TOKENS_FILE, "w", encoding="utf-8") as f:
         for n, t in tokens.items():
             f.write(f"{n}={t}\n")
@@ -62,7 +61,6 @@ def remove_token_file(name):
 
 # ========== DM垢接続管理 ==========
 async def connect_dm_client(name: str, token: str):
-    """DM垢を接続し死活状態を管理"""
     if name in dm_clients:
         try: await dm_clients[name]["client"].close()
         except: pass
@@ -86,9 +84,90 @@ async def connect_dm_client(name: str, token: str):
         return False
 
 # ========== 🛠 管理コマンド ==========
+
+# ✅ 【新コマンド】フォーム形式で一括登録
+@bot.command(name="add_tokens")
+async def add_tokens_cmd(ctx):
+    """✅ /add_tokens → フォームを開いて複数トークンを一括登録"""
+    if not ctx.author.guild_permissions.administrator:
+        return await ctx.send("❌ 管理者専用コマンド")
+
+    # メッセージ送信＋3分間待機
+    guide = await ctx.send(
+        "📋 **複数DMトークン 一括登録フォーム**\n"
+        "下記のようにトークンを貼り付けて返信してください\n\n"
+        "✅ 改行区間：1行に1トークン\n"
+        "✅ カンマ区切り：`token1,token2,token3`\n"
+        "✅ スペース区切り：`token1 token2 token3`\n\n"
+        "⏱ このメッセージから3分以内に返信してください"
+    )
+
+    def check(msg):
+        return msg.author == ctx.author and msg.channel == ctx.channel
+
+    try:
+        reply = await bot.wait_for("message", check=check, timeout=180.0)
+    except asyncio.TimeoutError:
+        await ctx.send("⏱ タイムアウトしました。もう一度 `/add_tokens` を実行してください")
+        return
+
+    # トークンを抽出（改行/カンマ/スペースで分割）
+    raw_text = reply.content.strip()
+    raw_list = re.split(r"[\n, 　]+", raw_text)  # 改行・カンマ・半角/全角スペースで分割
+    token_list = [t.strip() for t in raw_list if t.strip()]
+
+    if not token_list:
+        return await ctx.send("❌ トークンが検出されませんでした")
+
+    await ctx.send(
+        f"🔍 {len(token_list)}件のトークンを検知しました。登録を開始します…\n"
+        "しばらくお待ちください（1件あたり約1秒）"
+    )
+
+    # 自動的に名前を付けて登録
+    success = []
+    failed = []
+    existing_num = 0
+    used_names = set(dm_clients.keys())
+
+    for token in token_list:
+        # 重複しない名前を自動生成
+        while True:
+            existing_num += 1
+            name = f"dm{existing_num:03d}"
+            if name not in used_names:
+                used_names.add(name)
+                break
+
+        # 接続＆登録
+        res = await connect_dm_client(name, token)
+        save_token_file(name, token)
+        if res:
+            success.append(f"🟢 {name} ✅ ログイン成功")
+        else:
+            failed.append(f"🔴 {name} ❌ ログイン失敗")
+
+    # 結果報告
+    result = [
+        f"✅ **一括登録完了！** 計{len(token_list)}件\n",
+        f"🟢 成功: {len(success)}件",
+        f"🔴 失敗: {len(failed)}件\n"
+    ]
+    if success:
+        result.append("--- 成功した垢 ---")
+        result.extend(success[:15])  # 長すぎないように制限
+        if len(success) > 15:
+            result.append(f"…ほか {len(success)-15}件")
+    if failed:
+        result.append("\n--- 失敗した垢 ---")
+        result.extend(failed[:10])
+
+    await ctx.send("\n".join(result))
+
+
 @bot.command(name="set_token")
 async def set_token_cmd(ctx, name: str, token: str):
-    """/set_token 名前 トークン → DM垢を追加"""
+    """/set_token 名前 トークン → 個別登録（従来通り）"""
     if not ctx.author.guild_permissions.administrator:
         return await ctx.send("❌ 管理者専用コマンド")
     
@@ -98,6 +177,7 @@ async def set_token_cmd(ctx, name: str, token: str):
         await ctx.send(f"✅ DM垢「{name}」登録完了！🟢 生きてます")
     else:
         await ctx.send(f"⚠️ DM垢「{name}」登録しましたがログイン不可 🔴 トークン確認")
+
 
 @bot.command(name="status")
 async def status_cmd(ctx):
@@ -119,6 +199,7 @@ async def status_cmd(ctx):
     lines.append(f"\n✅ 生きてる: {alive_count} / 計{len(dm_clients)}")
     await ctx.send("\n".join(lines))
 
+
 @bot.command(name="remove_dm")
 async def remove_dm_cmd(ctx, name: str):
     """/remove_dm 名前 → DM垢を削除"""
@@ -131,19 +212,17 @@ async def remove_dm_cmd(ctx, name: str):
     else:
         await ctx.send("❌ その名前は存在しません")
 
-# ✅ 【自動判別版】実行したサーバーに全DM垢を一斉入室
+
 @bot.command(name="join_all")
 async def join_all_cmd(ctx):
-    """/join_all → 【自動】このサーバーに生きてるDM垢を全員入室"""
+    """/join_all → このサーバーに生きてるDM垢を全員入室"""
     if not ctx.author.guild_permissions.administrator:
         return await ctx.send("❌ 管理者専用コマンド")
 
-    # ✅ コマンドを実行したサーバーを自動取得
     guild = ctx.guild
     if not guild:
         return await ctx.send("❌ サーバーが取得できませんでした")
 
-    # 招待コード抽出
     invite_code = INVITE_LINK.split("/")[-1]
 
     await ctx.send(
@@ -161,23 +240,21 @@ async def join_all_cmd(ctx):
             continue
 
         try:
-            # 招待を取得して入室
             invite = await info["client"].fetch_invite(invite_code)
             await info["client"].accept_invite(invite)
             success.append(f"🟢 {name}：✅ 入室成功")
             print(f"✅ [{name}] サーバー「{guild.name}」入室完了")
-            await asyncio.sleep(1.5)  # レート制限対策
+            await asyncio.sleep(1.5)
         except Exception as e:
             failed.append(f"⚠️ {name}：❌ 失敗 ({type(e).__name__})")
             print(f"🔴 [{name}] 入室失敗: {e}")
 
-    # 結果報告
     result = ["📊 **入室結果**\n"]
     if success:
-        result.append("✅ 成功したアカウント:")
+        result.append("✅ 成功:")
         result.extend([f"  {s}" for s in success])
     if failed:
-        result.append("\n❌ 失敗したアカウント:")
+        result.append("\n❌ 失敗:")
         result.extend([f"  {f}" for f in failed])
     result.append(f"\n📈 まとめ: 成功 {len(success)}体 / 失敗 {len(failed)}体")
 
@@ -186,7 +263,6 @@ async def join_all_cmd(ctx):
 
 # ========== 😈 同時並行スパム ==========
 async def spam_worker(user, client, name):
-    """1垢分の送信タスク：永遠に送り続ける"""
     count = 0
     while True:
         try:
@@ -204,25 +280,17 @@ async def spam_worker(user, client, name):
 
         await asyncio.sleep(spam_interval)
 
-        # どのサーバーでも良いが、入室ログ用にGUILD_IDを使う
-        guild = bot.get_guild(JOIN_LOG_CHANNEL)
-        if guild and guild.get_member(user.id):
+        log_ch = bot.get_channel(JOIN_LOG_CHANNEL)
+        if log_ch and log_ch.guild.get_member(user.id):
             print(f"✅ {user.name} 収容 → 全スパム停止")
             return
 
+
 async def spam_loop(user_id: int):
-    """脱走を検知したサーバーで実行"""
-    # 全サーバーを走査してユーザーが居たサーバーを特定
     target_guild = None
-    for g in bot.guilds:
-        if g.get_member(user_id):
-            target_guild = g
-            break
-    # 退出後は直接取得できないので、ログチャンネルから逆引き
-    if not target_guild:
-        log_ch = bot.get_channel(JOIN_LOG_CHANNEL)
-        if log_ch:
-            target_guild = log_ch.guild
+    log_ch = bot.get_channel(JOIN_LOG_CHANNEL)
+    if log_ch:
+        target_guild = log_ch.guild
     if not target_guild:
         print("⚠️ 対象サーバーを特定できません")
         return
@@ -231,14 +299,14 @@ async def spam_loop(user_id: int):
         await target_guild.ban(discord.Object(id=user_id), reason="脱走試行", delete_message_days=0)
         await asyncio.sleep(0.5)
         await target_guild.unban(discord.Object(id=user_id))
-        print(f"⚡ BAN→解除実行: ユーザーID:{user_id} @ {target_guild.name}")
+        print(f"⚡ BAN→解除実行: ID:{user_id} @ {target_guild.name}")
     except Exception as e:
         print(f"⚠️ BAN/解除エラー: {e}")
 
-    log_ch = bot.get_channel(LEAVE_LOG_CHANNEL)
+    leave_ch = bot.get_channel(LEAVE_LOG_CHANNEL)
     alive_list = [n for n, i in dm_clients.items() if i["alive"]]
-    if log_ch:
-        await log_ch.send(
+    if leave_ch:
+        await leave_ch.send(
             f"🚨 **脱走検知 → BAN→解除＋同時スパム起動**\n"
             f"👤 <@{user_id}> (`{user_id}`)\n"
             f"🏠 サーバー: {target_guild.name}\n"
@@ -246,7 +314,6 @@ async def spam_loop(user_id: int):
             f"📨 同時並行送信中…"
         )
 
-    # ユーザー情報を取得
     user = await bot.fetch_user(user_id)
     if not user:
         return
@@ -258,16 +325,16 @@ async def spam_loop(user_id: int):
             tasks.append(t)
     
     if not tasks:
-        if log_ch:
-            await log_ch.send("⚠️ **生きてるDM垢が0体です！`/set_token` で追加してください**")
+        if leave_ch:
+            await leave_ch.send("⚠️ **生きてるDM垢が0体です！`/add_tokens` または `/set_token` で追加してください**")
         return
 
     await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
     for t in tasks:
         t.cancel()
 
-    if log_ch:
-        await log_ch.send(f"✅ <@{user_id}> が収容されました。スパム停止。")
+    if leave_ch:
+        await leave_ch.send(f"✅ <@{user_id}> が収容されました。スパム停止。")
 
 
 @bot.event
@@ -277,9 +344,9 @@ async def on_member_remove(member):
     task = asyncio.create_task(spam_loop(member.id))
     active_tasks[member.id] = task
 
+
 @bot.event
 async def on_member_join(member):
-    """再入室時：スパム停止＋ログ"""
     if member.id in active_tasks:
         active_tasks.pop(member.id).cancel()
 
@@ -292,7 +359,7 @@ async def on_member_join(member):
             f"💀 再脱走時は{alive_count}体同時で迎撃"
         )
 
-# ========== 起動 ==========
+
 @bot.event
 async def on_ready():
     saved = load_tokens()
@@ -305,13 +372,13 @@ async def on_ready():
     print(f"🔒 牢屋Bot起動: {bot.user}")
     print(f"📋 登録: {len(dm_clients)}体 / 🟢生: {alive_count}体")
     print(f"⚡ 脱走時: BAN→解除＋全垢同時スパム")
-    print(f"🚀 入室コマンド: /join_all （サーバー自動判別）")
+    print(f"🚀 一括登録: /add_tokens")
     print("="*70)
-    await bot.change_presence(activity=discord.Game(name=f"😈 /join_allで自動入室｜{alive_count}体同時"))
+    await bot.change_presence(activity=discord.Game(name=f"😈 /add_tokensで一括登録｜{alive_count}体同時"))
 
 
 def get_bot_token():
-    token = os.getenv("LOOP_BOT_TOKEN")  # Railwayの環境変数に合わせる
+    token = os.getenv("LOOP_BOT_TOKEN")
     if not token: raise RuntimeError("LOOP_BOT_TOKEN 未設定")
     return token
 
