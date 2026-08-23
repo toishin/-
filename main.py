@@ -117,7 +117,7 @@ class TokenInputModal(discord.ui.Modal, title="📋 DMトークン 一括登録�
                 if name not in used_names:
                     used_names.add(name)
                     break
-
+                idx += 1
             res = await connect_dm_client(name, token)
             save_token_file(name, token)
             if res:
