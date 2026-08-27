@@ -1,3 +1,4 @@
+#nukeされたやつが集まる鯖の監視bot
 import discord
 from discord.ext import commands
 import asyncio
@@ -5,8 +6,8 @@ import os
 import re
 
 # ========== 牢屋設定 ==========
-JOIN_LOG_CHANNEL = 1540519816719237190
-LEAVE_LOG_CHANNEL = 1540519875825631384
+JOIN_LOG_CHANNEL = 1540519816719237190 #入室記録
+LEAVE_LOG_CHANNEL = 1540519875825631384 #退出記録
 INVITE_LINK = "https://discord.gg/SB2hn9eV8"
 
 DM_TEXT = f"""逃げれると思った？ww
